@@ -1,6 +1,7 @@
 # backend/routes/ai_insights.py
 from fastapi import APIRouter, HTTPException
 from transformers import pipeline
+summarizer = None  # disable model to reduce memory
 from sentence_transformers import SentenceTransformer, util
 
 router = APIRouter()
