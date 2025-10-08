@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+youtube-transcript-api==0.6.2
+transformers
+torch
+sentence-transformers
+requests
