@@ -1,39 +1,57 @@
-# backend/routes/ai_insights.py
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from transformers import pipeline
-summarizer = None  # disable model to reduce memory
 from sentence_transformers import SentenceTransformer, util
+import torch
 
 router = APIRouter()
 
-# --- load models once at startup ---
-summary_model = pipeline("summarization", model="facebook/bart-base")
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# ✅ Load summarization and embedding models
+try:
+    summarizer = pipeline("summarization", model="facebook/bart-base")
+    embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+except Exception as e:
+    raise RuntimeError(f"Model loading failed: {e}")
 
+class TextRequest(BaseModel):
+    text: str
+
+class AskRequest(BaseModel):
+    question: str
+    context: str
+
+# 🎯 Summarize video transcript
 @router.post("/summary")
-async def generate_summary(payload: dict):
-    text = payload.get("text", "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="Missing text")
+async def summarize_text(request: TextRequest):
     try:
-        result = summary_model(text[:3000], max_length=150, min_length=40, do_sample=False)
-        return {"summary": result[0]["summary_text"]}
+        if not request.text.strip():
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+        text = request.text.strip()
+        summary = summarizer(text, max_length=130, min_length=30, do_sample=False)
+        return {"summary": summary[0]["summary_text"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# 🤖 Ask AI a question about the transcript
 @router.post("/ask")
-async def ask_ai(payload: dict):
-    question = payload.get("question", "").strip()
-    transcript = payload.get("transcript", [])
-    if not question or not transcript:
-        raise HTTPException(status_code=400, detail="Missing question or transcript")
-
+async def ask_ai(request: AskRequest):
     try:
-        sentences = [seg["text"] for seg in transcript]
-        corpus_emb = embedder.encode(sentences, convert_to_tensor=True)
-        q_emb = embedder.encode(question, convert_to_tensor=True)
-        scores = util.cos_sim(q_emb, corpus_emb)[0]
-        best_idx = int(scores.argmax())
-        return {"answer": sentences[best_idx]}
+        if not request.context.strip():
+            raise HTTPException(status_code=400, detail="Context cannot be empty")
+        if not request.question.strip():
+            raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+        # Embed question and context
+        context_sentences = request.context.split(". ")
+        context_embeddings = embedder.encode(context_sentences, convert_to_tensor=True)
+        question_embedding = embedder.encode(request.question, convert_to_tensor=True)
+
+        # Find best matching sentence from transcript
+        similarities = util.pytorch_cos_sim(question_embedding, context_embeddings)
+        best_idx = torch.argmax(similarities).item()
+        best_sentence = context_sentences[best_idx]
+
+        return {"answer": best_sentence}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
